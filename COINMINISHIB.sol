@@ -1535,7 +1535,19 @@ contract COINMINISHIB is ERC20, Ownable {
         return block.timestamp >= tradingEnabledTimestamp;
     }
     /**
-     * 代币转移
+     * 代币转移，里面包含一些交易限制逻辑：
+     * 1. fixedSaleStartTimestamp：固定交易开始时间
+     * 2. tradingEnabledTimestamp：交易所交易开始时间，一般晚于fixedSaleStartTimestamp，默认晚2个小时
+     * 执行情况如下：
+     * 1. 未开始交易时：即未到tradingEnabledTimestamp时
+     *  代币转移只能发生从bounceFixedSaleWallet和owner转给别人
+     *  1.1 从bounceFixedSaleWallet转给非owner时
+     *	  1.1.1 如果还未到fixedSaleStartTimestamp，则报错
+     *	  1.1.2 其他情况，从bounceFixedSaleWallet交易也并不是开放给所有人的，初期仅开放给fixedSaleEarlyParticipants里面的账户购买
+     *			当购买人数超过600账户或者时间过了600s，则开放给所有人购买。
+     *	1.2 从owner转移给其他人时，随时都可以执行，会走到最后面的分支
+     * 2. 已开始交易，则没有什么区别，执行交易
+     * 通用限制：每次卖出到amm不能超过maxSellTransactionAmount量。
      */
     function _transfer(
         address from,
@@ -1565,8 +1577,8 @@ contract COINMINISHIB is ERC20, Ownable {
         // or 600 transactions, whichever is first.
         // 固定卖出只能卖给owner或者早期的参与者，该限制只在前10分钟或者前600笔交易生效
         if(isFixedSaleBuy) {
-        	// 进这个分支时from只可能是
-        	// 固定交易时间没开始也不能操作bounceFixedSaleWallet
+        	// 进这个分支时from只可能是bounceFixedSaleWallet
+        	// 固定交易时间没开始也不能操作
             require(block.timestamp >= fixedSaleStartTimestamp, "MINISHIB: The fixed-sale has not started yet.");
             // 前10分钟或者前600笔交易生效
             bool openToEveryone = block.timestamp.sub(fixedSaleStartTimestamp) >= fixedSaleEarlyParticipantDuration ||
@@ -1598,11 +1610,11 @@ contract COINMINISHIB is ERC20, Ownable {
                 require(amount <= maxSellTransactionAmount, "Sell transfer amount exceeds the maxSellTransactionAmount.");
             }
         }
-        // 当前合约持币总量
-		    uint256 contractTokenBalance = balanceOf(address(this));
-		    // 只有总量大于最小swapTokens时才标记canSwap为true，此时执行添加流动性和分红，即手续费累积到一定程度才分红。
+        // 当前合约持币总量，这里的币来源于每次交易费
+		uint256 contractTokenBalance = balanceOf(address(this));
+		// 只有总量大于最小swapTokens时才标记canSwap为true，此时执行添加流动性和分红，即手续费累积到一定程度才分红。
         bool canSwap = contractTokenBalance >= swapTokensAtAmount;
-
+        // 累计一定量后添加流动性并添加分红
         if(
             tradingIsEnabled && // 交易启用状态
             canSwap && // 可以交易
@@ -1628,7 +1640,7 @@ contract COINMINISHIB is ERC20, Ownable {
         bool takeFee = !isFixedSaleBuy && tradingIsEnabled && !swapping;
 
         // if any account belongs to _isExcludedFromFee account then remove the fee
-        // 如果from或者to时不需要手续费的，则不需要手续费
+        // 如果from或者to时不需要手续费的，则不需要手续费，默认排除当前合约地址和流动性钱包地址
         if(_isExcludedFromFees[from] || _isExcludedFromFees[to]) {
             takeFee = false;
         }
